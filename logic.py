@@ -1,18 +1,35 @@
 import sqlite3
 from config import DATABASE
 
-
-conn = sqlite3.connect('deneme.db')
-cursor = conn.cursor()
-
 class DB_Manager:
     def __init__(self, database):
         self.database = database 
+
+    def connect_db(self):
+        """ Veritabanı bağlantısı oluşturur. """
+        return sqlite3.connect(self.database)
+
+    def drop_tables(self):
+        """ Veritabanındaki tüm tabloları siler. """
+        conn = self.connect_db()
+        cursor = conn.cursor()
+        tables = ["projects", "skills", "project_skills", "status", "images"]
         
+        try:
+            for table in tables:
+                cursor.execute(f"DROP TABLE IF EXISTS {table}")
+            conn.commit()
+            print("Tüm tablolar başarıyla silindi.")
+        except sqlite3.Error as e:
+            print(f"Hata oluştu: {e}")
+        finally:
+            conn.close()
+
     def create_tables(self):
-        conn = sqlite3.connect(self.database)
+        """ Gerekli tabloları oluşturur. """
+        conn = self.connect_db()
         with conn:
-            conn.execute('''CREATE TABLE projects (
+            conn.execute('''CREATE TABLE IF NOT EXISTS projects (
                             project_id INTEGER PRIMARY KEY,
                             user_id INTEGER,
                             project_name TEXT NOT NULL,
@@ -21,111 +38,103 @@ class DB_Manager:
                             status_id INTEGER,
                             FOREIGN KEY(status_id) REFERENCES status(status_id)
                         )''') 
-            conn.execute('''CREATE TABLE skills (
+            conn.execute('''CREATE TABLE IF NOT EXISTS skills (
                             skill_id INTEGER PRIMARY KEY,
                             skill_name TEXT
                         )''')
-            conn.execute('''CREATE TABLE project_skills (
+            conn.execute('''CREATE TABLE IF NOT EXISTS project_skills (
                             project_id INTEGER,
                             skill_id INTEGER,
                             FOREIGN KEY(project_id) REFERENCES projects(project_id),
                             FOREIGN KEY(skill_id) REFERENCES skills(skill_id)
                         )''')
-            conn.execute('''CREATE TABLE status (
+            conn.execute('''CREATE TABLE IF NOT EXISTS status (
                             status_id INTEGER PRIMARY KEY,
                             status_name TEXT
                         )''')
+            conn.execute('''CREATE TABLE IF NOT EXISTS images (
+                            id INTEGER PRIMARY KEY,
+                            name TEXT,
+                            png_data BLOB
+                        )''')
             conn.commit()
 
-    def __executemany(self, sql, data):
-            conn = sqlite3.connect(self.database)
-            with conn:
-                conn.executemany(sql, data)
-                conn.commit()
-    
-    def __select_data(self, sql, data = tuple()):
-        conn = sqlite3.connect(self.database)
-        with conn:
-            cur = conn.cursor()
-            cur.execute(sql, data)
-            return cur.fetchall()
+    def insert_statuses(self):
+        """ Status tablosuna gerekli durumları ekler. """
+        conn = self.connect_db()
+        cursor = conn.cursor()
 
-
+        status_list = [("Devam Ediyor",), ("Tamamlandı",), ("Beklemede",)]
+        
+        try:
+            cursor.executemany("INSERT OR IGNORE INTO status (status_name) VALUES (?)", status_list)
+            conn.commit()
+            print("Durumlar başarıyla eklendi.")
+        except sqlite3.Error as e:
+            print(f"Hata oluştu: {e}")
+        finally:
+            conn.close()
 
     def insert_project(self, data):
+        """ Proje ekleme metodu. """
         sql = """INSERT INTO projects 
         (user_id, project_name, url, status_id) 
         values(?, ?, ?, ?)"""
-        self.__executemany(sql, data)
+        conn = self.connect_db()
+        with conn:
+            conn.executemany(sql, data)
+            conn.commit()
 
+    def convert_to_binary(self, filename):
+        """ Dosyayı BLOB formatına çevirir. """
+        with open(filename, "rb") as file:
+            return file.read()
 
-    def insert_skill(self, user_id, project_name, skill):
-        sql = 'SELECT project_id FROM projects WHERE project_name = ? AND user_id = ?'
-        project_id = self.__select_data(sql, (project_name, user_id))[0][0]
-        skill_id = self.__select_data('SELECT skill_id FROM skills WHERE skill_name = ?', (skill,))[0][0]
-        data = [(project_id, skill_id)]
-        sql = 'INSERT OR IGNORE INTO project_skills VALUES(?, ?)'
-        self.__executemany(sql, data)
+    def insert_png(self, image_name):
+        """ PNG dosyasını veritabanına ekler. """
+        conn = self.connect_db()
+        cursor = conn.cursor()
 
+        try:
+            image_data = self.convert_to_binary(image_name)
+            insert_query = "INSERT INTO images (name, png_data) VALUES (?, ?)"
+            cursor.execute(insert_query, (image_name, image_data))
+            conn.commit()
+            print("PNG dosyası başarıyla veritabanına eklendi!")
+        except sqlite3.Error as e:
+            print(f"Hata oluştu: {e}")
+        finally:
+            conn.close()
 
-    def get_statuses(self):
-        sql="SELECT status_name FROM status"
-        return self.__select_data(sql)
-        
+    def update_project_status(self, project_id, new_status):
+        """ Belirtilen proje ID'sinin durumunu günceller. """
+        conn = self.connect_db()
+        cursor = conn.cursor()
 
-    def get_status_id(self, status_name):
-        sql = 'SELECT status_id FROM status WHERE status_name = ?'
-        res = self.__select_data(sql, (status_name,))
-        if res: return res[0][0]
-        else: return None
+        cursor.execute("SELECT status_id FROM status WHERE status_name = ?", (new_status,))
+        status_id_result = cursor.fetchone()
 
-    def get_projects(self, user_id):
-        sql="""SELECT * FROM projects 
-        WHERE user_id = ?"""
-        return self.__select_data(sql, data = (user_id,))
-        
-    def get_project_id(self, project_name, user_id):
-        return self.__select_data(sql='SELECT project_id FROM projects WHERE project_name = ? AND user_id = ?  ', data = (project_name, user_id,))[0][0]
-        
-    def get_skills(self):
-        return self.__select_data(sql='SELECT * FROM skills')
-    
-    def get_project_skills(self, project_name):
-        res = self.__select_data(sql='''SELECT skill_name FROM projects 
-        JOIN project_skills ON projects.project_id = project_skills.project_id 
-        JOIN skills ON skills.skill_id = project_skills.skill_id 
-        WHERE project_name = ?''', data = (project_name,) )
-        return ', '.join([x[0] for x in res])
-    
-    def get_project_info(self, user_id, project_name):
-        sql = """
-        SELECT project_name, description, url, status_name FROM projects 
-        JOIN status ON
-        status.status_id = projects.status_id)
-        WHERE project_name=? AND user_id=?
-        """
-        return self.__select_data(sql=sql, data = (project_name, user_id))
+        if not status_id_result:
+            print(f"Hata: '{new_status}' adlı durum bulunamadı. Lütfen status tablosunu kontrol edin.")
+            return
 
+        status_id = status_id_result[0]
 
-    def update_projects(self, param, data):
-        sql = f"""UPDATE projects SET {param} = ? 
-        WHERE project_name = ? AND user_id = ?"""
-        self.__executemany(sql, [data]) 
-
-
-    def delete_project(self, user_id, project_id):
-        sql = """DELETE FROM projects 
-        WHERE user_id = ? AND project_id = ? """
-        self.__executemany(sql, [(user_id, project_id)])
-    
-    def delete_skill(self, project_id, skill_id):
-        sql = """DELETE FROM skills 
-        WHERE skill_id = ? AND project_id = ? """
-        self.__executemany(sql, [(skill_id, project_id)])
+        try:
+            sql = "UPDATE projects SET status_id = ? WHERE project_id = ?"
+            cursor.execute(sql, (status_id, project_id))
+            conn.commit()
+            print(f"Proje {project_id} başarıyla '{new_status}' olarak güncellendi.")
+        except sqlite3.Error as e:
+            print(f"Hata oluştu: {e}")
+        finally:
+            conn.close()
 
 if __name__ == '__main__':
     manager = DB_Manager(DATABASE)
-    manager.create_tables()
-    data = [("1307","Otonom Araç","link daha mevcut değil","0")]
-    manager.insert_project(data=data)
-    
+    manager.drop_tables()  # Tüm tabloları sil (veritabanını sıfırla)
+    manager.create_tables()  # Sonra tekrar oluştur
+    manager.insert_statuses()  # Durumları ekle
+    manager.insert_png("kratos.png")  # PNG ekleme işlemi
+    manager.insert_project([(3, "Otonom Araç", "https://dahamevcutdeğil.com", 2)])
+    manager.update_project_status(3, "Tamamlandı")  # Örnek durum güncelleme
